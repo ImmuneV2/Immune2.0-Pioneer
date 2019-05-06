@@ -1,0 +1,181 @@
+
+# packages importing and getting the folder right
+import os
+import pandas as pd
+import numpy as py
+path_to_folder = "/Users/Ahmed/Desktop/Data.csv"
+
+# packages importing
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+#importing
+df=pd.read_csv("/Users/Ahmed/Desktop/Data.csv")
+print(df.shape)
+df.head()
+
+#number of unique names in both variables
+print(len(df.CDR.unique()))
+print(len(df.Epitope.unique()))
+
+#splitting words to characters
+dfc=[list(df.CDR[i]) for i in range(df.shape[0])]
+
+min(len(dfc[i]) for i in range(df.shape[0]))
+max([len(dfc[i]) for i in range(df.shape[0])])
+np.mean([len(dfc[i]) for i in range(df.shape[0])])
+
+target_names=df.Epitope.unique()
+target_names[:5]
+
+texts=dfc
+texts[:3]
+
+#label processing the data
+from sklearn import preprocessing
+le = preprocessing.LabelEncoder()
+target=le.fit_transform(df.Epitope)
+target[:3]
+
+#splitting training/testing
+from sklearn.model_selection import train_test_split
+
+target_train, target_test, texts_train, texts_test = train_test_split(
+    target, texts, test_size=0.2, random_state=0)
+
+target_train.shape , target_test.shape
+
+from collections import Counter
+MAX_NB_WORDS = 10000
+
+tokens = texts_train
+vocab = Counter([w for s in tokens for w in s]).most_common(MAX_NB_WORDS)
+
+word_to_index, index_to_word = {}, []
+for i, (w,_) in enumerate(vocab):
+  word_to_index[w] = i
+  index_to_word.append(w)
+sequences_train = [[word_to_index[w] for w in t if w in word_to_index] for t in tokens]
+sequences_test = [[word_to_index[w] for w in t if w in word_to_index] for t in texts_test]
+
+([index_to_word[idx] for idx in sequences_train[0]])
+
+import torch
+from torch import nn
+from torch.utils import data
+import torch.nn.functional as F
+
+MAX_SEQUENCE_LENGTH = 1000
+
+x_train = torch.nn.utils.rnn.pad_sequence([torch.Tensor(s).long() for s in sequences_train],
+                                               batch_first=True)[:,:MAX_SEQUENCE_LENGTH]
+x_test = torch.nn.utils.rnn.pad_sequence([torch.Tensor(s).long() for s in sequences_test],
+                                               batch_first=True)[:,:MAX_SEQUENCE_LENGTH]
+
+y_train = torch.Tensor(target_train).long()
+y_test = torch.Tensor(target_test).long()
+(x_train.shape, x_test.shape)
+
+train_dataset = data.TensorDataset(x_train, y_train)
+test_dataset = data.TensorDataset(x_test, y_test)
+
+train_dataset[0]
+
+#functions trained
+def accuracy(output, target):
+    y_cat = output.max(1)[1]
+    return (y_cat == target).float().mean()
+
+def train_epoch(loader, model, loss, optimizer):
+    losses, accuracies = 0., 0.
+    for batch_idx, (data, target) in enumerate(loader):
+        optimizer.zero_grad()
+        output = model(data)
+        loss_value = loss(output, target)
+        loss_value.backward()
+        optimizer.step()
+        acc_value = accuracy(output, target)
+        losses += loss_value.item()
+        accuracies += acc_value.item()
+    batch_idx += 1
+    return losses / batch_idx, accuracies / batch_idx
+
+def eval_epoch(loader, model, loss):
+    losses, accuracies = 0., 0.
+    for batch_idx, (data, target) in enumerate(loader):
+        output = model(data)
+        loss_value = loss(output, target)
+        acc_value = accuracy(output, target)
+        losses += loss_value.item()
+        accuracies += acc_value.item()
+    batch_idx += 1
+    return losses / batch_idx, accuracies / batch_idx
+
+def train_model(model, loss, optimizer, batch_size=10):
+
+    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    train_losses, train_accuracies, test_losses, test_accuracies = [],[],[],[]
+    for epoch in range(15):
+        train_loss, train_acc = train_epoch(train_loader, model, loss, optimizer)
+        test_loss, test_acc = eval_epoch(test_loader, model, loss)
+        train_losses.append(train_loss)
+        test_losses.append(test_loss)
+        train_accuracies.append(train_acc)
+        test_accuracies.append(test_acc)
+        print(f"Epoch {epoch} - loss = {train_loss:.2} - train_acc = {train_acc:.2} - test_acc = {test_acc:.2}")
+
+
+    fig, axs = plt.subplots(2,1, figsize=(6,8))
+    axs[0].plot(train_losses, label="train")
+    axs[0].plot(test_losses, label="test")
+    axs[0].set_title('Loss')
+    axs[0].legend(loc='best')
+
+    axs[1].plot(train_accuracies, label='train')
+    axs[1].plot(test_accuracies, label='test')
+    axs[1].set_ylim(0, 1.1)
+    axs[1].set_ylabel("accuracy")
+    axs[1].legend(loc='best')
+    plt.show()
+
+    #LSTM
+class ConvLSTM(nn.Module):
+    """
+    - conv1d - relu - maxpooling
+    - conv1d - relu - maxpooling
+    - lstm
+    - fully connected
+    """
+    def __init__(self, vocab_size, emb_dim, n_classes):
+        super(ConvLSTM, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, emb_dim)
+        self.conv1 = nn.Conv1d(emb_dim, emb_dim, 10)
+        self.lstm = nn.LSTM(emb_dim, emb_dim)
+        self.fc = nn.Linear(emb_dim, n_classes)
+
+
+    def forward(self, x):
+
+        x = self.embedding(x)
+        x = x.transpose(1,2)
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = F.max_pool1d(x, kernel_size=5) # batch_size x emb_dim x len
+        x = x.transpose(0,1) #  emb_dim x batch_size x len
+        x = x.transpose(0,2)
+        x, _ = self.lstm(x)
+        x = x[-1]
+        x = self.fc(x)
+        return F.log_softmax(x, -1)
+
+#get the parametres ready
+n_classes=len(df.Epitope.unique())
+model = ConvLSTM(MAX_NB_WORDS, 100, n_classes)
+loss = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters())
+
+#training the model
+train_model(model, loss, optimizer)
